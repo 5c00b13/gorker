@@ -1,183 +1,287 @@
-from collections import defaultdict
-from copy import deepcopy
-from typing import List
+package main
 
-from marker.debug.data import dump_equation_debug_data
-from marker.equations.inference import get_total_texify_tokens, get_latex_batched
-from marker.pdf.images import render_bbox_image
-from marker.schema.bbox import rescale_bbox
-from marker.schema.page import Page
-from marker.schema.block import Line, Span, Block, bbox_from_lines, split_block_lines, find_insert_block
-from marker.settings import settings
+import (
+	"fmt"
+	"strings"
+)
 
+// Placeholder types and functions
+type Page struct {
+	Blocks []Block
+	Layout Layout
+	Bbox   Bbox
+}
 
-def find_equation_blocks(page, processor):
-    equation_blocks = []
-    equation_regions = [l.bbox for l in page.layout.bboxes if l.label in ["Formula"]]
-    equation_regions = [rescale_bbox(page.layout.image_bbox, page.bbox, b) for b in equation_regions]
+type Block struct {
+	Lines     []Line
+	Bbox      Bbox
+	BlockType string
+	Pnum      int
+}
 
-    lines_to_remove = defaultdict(list)
-    insert_points = {}
-    equation_lines = defaultdict(list)
-    for region_idx, region in enumerate(equation_regions):
-        for block_idx, block in enumerate(page.blocks):
-            for line_idx, line in enumerate(block.lines):
-                if line.intersection_pct(region) > settings.BBOX_INTERSECTION_THRESH:
-                    # We will remove this line from the block
-                    lines_to_remove[region_idx].append((block_idx, line_idx))
-                    equation_lines[region_idx].append(line)
+type Line struct {
+	Spans []Span
+	Bbox  Bbox
+}
 
-                    if region_idx not in insert_points:
-                        insert_points[region_idx] = (block_idx, line_idx)
+type Span struct {
+	Text       string
+	Bbox       Bbox
+	SpanID     string
+	Font       string
+	FontWeight int
+	FontSize   int
+}
 
-    # Account for regions where the lines were not detected
-    for region_idx, region in enumerate(equation_regions):
-        if region_idx in insert_points:
-            continue
+type Bbox struct{}
 
-        insert_points[region_idx] = (find_insert_block(page.blocks, region), 0)
+type Layout struct {
+	Bboxes    []Bbox
+	ImageBbox Bbox
+}
 
-    block_lines_to_remove = defaultdict(set)
-    for region_idx, equation_region in enumerate(equation_regions):
-        if region_idx not in equation_lines or len(equation_lines[region_idx]) == 0:
-            block_text = ""
-            total_tokens = 0
-        else:
-            equation_block = equation_lines[region_idx]
-            block_text = " ".join([line.prelim_text for line in equation_block])
-            total_tokens = get_total_texify_tokens(block_text, processor)
+// Placeholder functions
+func rescaleBbox(imageBbox, pageBbox, targetBbox Bbox) Bbox {
+	// Implementation omitted
+	return Bbox{}
+}
 
-        equation_insert = insert_points[region_idx]
-        equation_insert_line_idx = equation_insert[1]
-        equation_insert_line_idx -= len(
-            [x for x in lines_to_remove[region_idx] if x[0] == equation_insert[0] and x[1] < equation_insert[1]])
+func findInsertBlock(blocks []Block, region Bbox) int {
+	// Implementation omitted
+	return 0
+}
 
-        selected_blocks = [equation_insert[0], equation_insert_line_idx, total_tokens, block_text, equation_region]
-        if total_tokens < settings.TEXIFY_MODEL_MAX:
-            # Account for the lines we're about to remove
-            for item in lines_to_remove[region_idx]:
-                block_lines_to_remove[item[0]].add(item[1])
-            equation_blocks.append(selected_blocks)
+func getTotalTexifyTokens(text string, processor interface{}) int {
+	// Implementation omitted
+	return 0
+}
 
-    # Remove the lines from the blocks
-    for block_idx, bad_lines in block_lines_to_remove.items():
-        block = page.blocks[block_idx]
-        block.lines = [line for idx, line in enumerate(block.lines) if idx not in bad_lines]
+func findEquationBlocks(page Page, processor interface{}) [][]interface{} {
+	equationBlocks := [][]interface{}{}
+	equationRegions := []Bbox{}
+	for _, l := range page.Layout.Bboxes {
+		if l.Label == "Formula" {
+			equationRegions = append(equationRegions, l)
+		}
+	}
 
-    return equation_blocks
+	for i, region := range equationRegions {
+		equationRegions[i] = rescaleBbox(page.Layout.ImageBbox, page.Bbox, region)
+	}
 
+	linesToRemove := make(map[int][][2]int)
+	insertPoints := make(map[int][2]int)
+	equationLines := make(map[int][]Line)
 
-def increment_insert_points(page_equation_blocks, insert_block_idx, insert_count):
-    for idx, (block_idx, line_idx, token_count, block_text, equation_bbox) in enumerate(page_equation_blocks):
-        if block_idx >= insert_block_idx:
-            page_equation_blocks[idx][0] += insert_count
+	for regionIdx, region := range equationRegions {
+		for blockIdx, block := range page.Blocks {
+			for lineIdx, line := range block.Lines {
+				if line.IntersectionPct(region) > settings.BboxIntersectionThresh {
+					linesToRemove[regionIdx] = append(linesToRemove[regionIdx], [2]int{blockIdx, lineIdx})
+					equationLines[regionIdx] = append(equationLines[regionIdx], line)
 
+					if _, exists := insertPoints[regionIdx]; !exists {
+						insertPoints[regionIdx] = [2]int{blockIdx, lineIdx}
+					}
+				}
+			}
+		}
+	}
 
-def insert_latex_block(page_blocks: Page, page_equation_blocks, predictions, pnum, processor):
-    converted_spans = []
-    idx = 0
-    success_count = 0
-    fail_count = 0
-    for block_number, (insert_block_idx, insert_line_idx, token_count, block_text, equation_bbox) in enumerate(page_equation_blocks):
-        latex_text = predictions[block_number]
-        conditions = [
-            get_total_texify_tokens(latex_text, processor) < settings.TEXIFY_MODEL_MAX,  # Make sure we didn't get to the overall token max, indicates run-on
-            len(latex_text) > len(block_text) * .7,
-            len(latex_text.strip()) > 0
-        ]
+	// Handle regions where lines were not detected
+	for regionIdx, region := range equationRegions {
+		if _, exists := insertPoints[regionIdx]; !exists {
+			insertPoints[regionIdx] = [2]int{findInsertBlock(page.Blocks, region), 0}
+		}
+	}
 
-        new_block = Block(
-            lines=[Line(
-                spans=[
-                    Span(
-                        text=block_text.replace("\n", " "),
-                        bbox=equation_bbox,
-                        span_id=f"{pnum}_{idx}_fixeq",
-                        font="Latex",
-                        font_weight=0,
-                        font_size=0
-                    )
-                ],
-                bbox=equation_bbox
-            )],
-            bbox=equation_bbox,
-            block_type="Formula",
-            pnum=pnum
-        )
+	blockLinesToRemove := make(map[int]map[int]bool)
+	for regionIdx, equationRegion := range equationRegions {
+		var blockText string
+		var totalTokens int
 
-        if not all(conditions):
-            fail_count += 1
-        else:
-            success_count += 1
-            new_block.lines[0].spans[0].text = latex_text.replace("\n", " ")
-            converted_spans.append(deepcopy(new_block.lines[0].spans[0]))
+		if lines, exists := equationLines[regionIdx]; exists && len(lines) > 0 {
+			for _, line := range lines {
+				blockText += line.PrelimText + " "
+			}
+			totalTokens = getTotalTexifyTokens(blockText, processor)
+		}
 
-        # Add in the new LaTeX block
-        if insert_line_idx == 0:
-            page_blocks.blocks.insert(insert_block_idx, new_block)
-            increment_insert_points(page_equation_blocks, insert_block_idx, 1)
-        elif insert_line_idx >= len(page_blocks.blocks[insert_block_idx].lines):
-            page_blocks.blocks.insert(insert_block_idx + 1, new_block)
-            increment_insert_points(page_equation_blocks, insert_block_idx + 1, 1)
-        else:
-            new_blocks = []
-            for block_idx, block in enumerate(page_blocks.blocks):
-                if block_idx == insert_block_idx:
-                    split_block = split_block_lines(block, insert_line_idx)
-                    new_blocks.append(split_block[0])
-                    new_blocks.append(new_block)
-                    new_blocks.append(split_block[1])
-                    increment_insert_points(page_equation_blocks, insert_block_idx, 2)
-                else:
-                    new_blocks.append(block)
-            page_blocks.blocks = new_blocks
+		equationInsert := insertPoints[regionIdx]
+		equationInsertLineIdx := equationInsert[1]
+		for _, item := range linesToRemove[regionIdx] {
+			if item[0] == equationInsert[0] && item[1] < equationInsert[1] {
+				equationInsertLineIdx--
+			}
+		}
 
-    return success_count, fail_count, converted_spans
+		selectedBlocks := []interface{}{equationInsert[0], equationInsertLineIdx, totalTokens, blockText, equationRegion}
+		if totalTokens < settings.TexifyModelMax {
+			for _, item := range linesToRemove[regionIdx] {
+				if _, exists := blockLinesToRemove[item[0]]; !exists {
+					blockLinesToRemove[item[0]] = make(map[int]bool)
+				}
+				blockLinesToRemove[item[0]][item[1]] = true
+			}
+			equationBlocks = append(equationBlocks, selectedBlocks)
+		}
+	}
 
+	// Remove lines from blocks
+	for blockIdx, badLines := range blockLinesToRemove {
+		newLines := []Line{}
+		for idx, line := range page.Blocks[blockIdx].Lines {
+			if !badLines[idx] {
+				newLines = append(newLines, line)
+			}
+		}
+		page.Blocks[blockIdx].Lines = newLines
+	}
 
-def replace_equations(doc, pages: List[Page], texify_model, batch_multiplier=1):
-    unsuccessful_ocr = 0
-    successful_ocr = 0
+	return equationBlocks
+}
 
-    # Find potential equation regions, and length of text in each region
-    equation_blocks = []
-    for pnum, page in enumerate(pages):
-        equation_blocks.append(find_equation_blocks(page, texify_model.processor))
+func incrementInsertPoints(pageEquationBlocks [][]interface{}, insertBlockIdx, insertCount int) {
+	for idx, block := range pageEquationBlocks {
+		if blockIdx, ok := block[0].(int); ok && blockIdx >= insertBlockIdx {
+			pageEquationBlocks[idx][0] = blockIdx + insertCount
+		}
+	}
+}
 
-    eq_count = sum([len(x) for x in equation_blocks])
+func insertLatexBlock(pageBlocks *Page, pageEquationBlocks [][]interface{}, predictions []string, pnum int, processor interface{}) (int, int, []Span) {
+	convertedSpans := []Span{}
+	successCount := 0
+	failCount := 0
 
-    images = []
-    token_counts = []
-    for page_idx, page_equation_blocks in enumerate(equation_blocks):
-        page_obj = doc[page_idx]
-        for equation_idx, (insert_block_idx, insert_line_idx, token_count, block_text, equation_bbox) in enumerate(page_equation_blocks):
-            png_image = render_bbox_image(page_obj, pages[page_idx], equation_bbox)
+	for blockNumber, blockData := range pageEquationBlocks {
+		insertBlockIdx := blockData[0].(int)
+		insertLineIdx := blockData[1].(int)
+		tokenCount := blockData[2].(int)
+		blockText := blockData[3].(string)
+		equationBbox := blockData[4].(Bbox)
 
-            images.append(png_image)
-            token_counts.append(token_count)
+		latexText := predictions[blockNumber]
+		conditions := []bool{
+			getTotalTexifyTokens(latexText, processor) < settings.TexifyModelMax,
+			float64(len(latexText)) > float64(len(blockText))*0.7,
+			len(strings.TrimSpace(latexText)) > 0,
+		}
 
-    # Make batched predictions
-    predictions = get_latex_batched(images, token_counts, texify_model, batch_multiplier=batch_multiplier)
+		newBlock := Block{
+			Lines: []Line{{
+				Spans: []Span{{
+					Text:       strings.ReplaceAll(blockText, "\n", " "),
+					Bbox:       equationBbox,
+					SpanID:     fmt.Sprintf("%d_%d_fixeq", pnum, blockNumber),
+					Font:       "Latex",
+					FontWeight: 0,
+					FontSize:   0,
+				}},
+				Bbox: equationBbox,
+			}},
+			Bbox:      equationBbox,
+			BlockType: "Formula",
+			Pnum:      pnum,
+		}
 
-    # Replace blocks with predictions
-    page_start = 0
-    converted_spans = []
-    for page_idx, page_equation_blocks in enumerate(equation_blocks):
-        page_equation_count = len(page_equation_blocks)
-        page_predictions = predictions[page_start:page_start + page_equation_count]
-        success_count, fail_count, converted_span = insert_latex_block(
-            pages[page_idx],
-            page_equation_blocks,
-            page_predictions,
-            page_idx,
-            texify_model.processor
-        )
-        converted_spans.extend(converted_span)
-        page_start += page_equation_count
-        successful_ocr += success_count
-        unsuccessful_ocr += fail_count
+		allTrue := true
+		for _, condition := range conditions {
+			if !condition {
+				allTrue = false
+				break
+			}
+		}
 
-    # If debug mode is on, dump out conversions for comparison
-    dump_equation_debug_data(doc, images, converted_spans)
+		if !allTrue {
+			failCount++
+		} else {
+			successCount++
+			newBlock.Lines[0].Spans[0].Text = strings.ReplaceAll(latexText, "\n", " ")
+			convertedSpans = append(convertedSpans, newBlock.Lines[0].Spans[0])
+		}
 
-    return pages, {"successful_ocr": successful_ocr, "unsuccessful_ocr": unsuccessful_ocr, "equations": eq_count}
+		// Insert the new LaTeX block
+		if insertLineIdx == 0 {
+			pageBlocks.Blocks = append(pageBlocks.Blocks[:insertBlockIdx], append([]Block{newBlock}, pageBlocks.Blocks[insertBlockIdx:]...)...)
+			incrementInsertPoints(pageEquationBlocks, insertBlockIdx, 1)
+		} else if insertLineIdx >= len(pageBlocks.Blocks[insertBlockIdx].Lines) {
+			pageBlocks.Blocks = append(pageBlocks.Blocks[:insertBlockIdx+1], append([]Block{newBlock}, pageBlocks.Blocks[insertBlockIdx+1:]...)...)
+			incrementInsertPoints(pageEquationBlocks, insertBlockIdx+1, 1)
+		} else {
+			newBlocks := []Block{}
+			for blockIdx, block := range pageBlocks.Blocks {
+				if blockIdx == insertBlockIdx {
+					splitBlock := splitBlockLines(block, insertLineIdx)
+					newBlocks = append(newBlocks, splitBlock[0], newBlock, splitBlock[1])
+					incrementInsertPoints(pageEquationBlocks, insertBlockIdx, 2)
+				} else {
+					newBlocks = append(newBlocks, block)
+				}
+			}
+			pageBlocks.Blocks = newBlocks
+		}
+	}
+
+	return successCount, failCount, convertedSpans
+}
+
+func replaceEquations(doc interface{}, pages []Page, texifyModel interface{}, batchMultiplier int) ([]Page, map[string]int) {
+	unsuccessfulOCR := 0
+	successfulOCR := 0
+
+	equationBlocks := [][]interface{}{}
+	for _, page := range pages {
+		equationBlocks = append(equationBlocks, findEquationBlocks(page, texifyModel))
+	}
+
+	eqCount := 0
+	for _, blocks := range equationBlocks {
+		eqCount += len(blocks)
+	}
+
+	images := []interface{}{}
+	tokenCounts := []int{}
+
+	for pageIdx, pageEquationBlocks := range equationBlocks {
+		pageObj := doc.([]interface{})[pageIdx]
+		for _, blockData := range pageEquationBlocks {
+			equationBbox := blockData[4].(Bbox)
+			pngImage := renderBboxImage(pageObj, pages[pageIdx], equationBbox)
+			images = append(images, pngImage)
+			tokenCounts = append(tokenCounts, blockData[2].(int))
+		}
+	}
+
+	predictions := getLatexBatched(images, tokenCounts, texifyModel, batchMultiplier)
+
+	pageStart := 0
+	convertedSpans := []Span{}
+	for pageIdx, pageEquationBlocks := range equationBlocks {
+		pageEquationCount := len(pageEquationBlocks)
+		pagePredictions := predictions[pageStart : pageStart+pageEquationCount]
+		successCount, failCount, convertedSpan := insertLatexBlock(
+			&pages[pageIdx],
+			pageEquationBlocks,
+			pagePredictions,
+			pageIdx,
+			texifyModel,
+		)
+		convertedSpans = append(convertedSpans, convertedSpan...)
+		pageStart += pageEquationCount
+		successfulOCR += successCount
+		unsuccessfulOCR += failCount
+	}
+
+	// Debug mode data dump omitted
+
+	return pages, map[string]int{
+		"successful_ocr":   successfulOCR,
+		"unsuccessful_ocr": unsuccessfulOCR,
+		"equations":        eqCount,
+	}
+}
+
+func main() {
+	// Main function implementation omitted
+}
