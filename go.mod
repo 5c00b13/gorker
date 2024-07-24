@@ -4,9 +4,11 @@ go 1.22.4
 
 require (
 	github.com/disintegration/imaging v1.6.2
+	github.com/gen2brain/go-fitz v1.23.7
 	github.com/kolesa-team/go-webp v1.0.4
 	github.com/lithammer/fuzzysearch v1.1.8
 	github.com/olekukonko/tablewriter v0.0.5
+	github.com/otiai10/gosseract/v2 v2.4.1
 	github.com/sahilm/fuzzy v0.1.1
 	github.com/schollz/progressbar/v3 v3.14.4
 )
